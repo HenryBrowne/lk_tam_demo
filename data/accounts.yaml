@@ -1,0 +1,83 @@
+# Seed accounts for simulate_accounts.py.
+#
+# plan_minutes_limit / plan_concurrency_limit are the (synthetic) contract limits
+# the usage signal is measured against. `profile` drives the synthetic telemetry
+# the simulator generates - it is NOT stored in the DB (only name + the two limits
+# are). All numbers here are illustrative, chosen to exercise each verdict path.
+#
+# acme-corp is the one real account: the Phase 2 checkpoint captured 4 real
+# turn_metrics rows for it. The simulator seeds its plan + a light healthy backdated
+# history and preserves the real rows (they live under an RM_ room_sid; synthetic
+# rooms are SIM_).
+
+accounts:
+  # ---- Healthy: everything inside thresholds -------------------------------
+  - account_id: northwind
+    name: Northwind Trading
+    plan_minutes_limit: 20000
+    plan_concurrency_limit: 50
+    profile:
+      kind: healthy
+      sessions_per_day: [6, 12]
+      latency_ms: { mean: 720, sd: 130 }
+      poor_lost_share: { mean: 0.01, sd: 0.01 }
+      ungraceful_rate: 0.02
+      error_rate: 0.01
+
+  # ---- Watch: latency still green, but TTFT p95 regressed + error rate up --
+  - account_id: globex
+    name: Globex Corporation
+    plan_minutes_limit: 12000
+    plan_concurrency_limit: 30
+    profile:
+      kind: watch
+      # Watch comes from ONE clean signal: p95 TTFT regressed week-over-week while
+      # median latency, quality, errors and stability all stayed green.
+      sessions_per_day: [5, 10]
+      latency_ms: { mean: 700, sd: 110 }   # median stays green
+      this_week_ttft_mult: 1.22            # p95 TTFT +~20% WoW -> Watch band
+      poor_lost_share: { mean: 0.03, sd: 0.02 }
+      ungraceful_rate: 0.05
+      error_rate: 0.02
+
+  # ---- At-risk: the deliberately broken account --------------------------
+  - account_id: initech
+    name: Initech LLC
+    plan_minutes_limit: 8000
+    plan_concurrency_limit: 20
+    profile:
+      kind: at_risk
+      sessions_per_day: [4, 9]
+      latency_ms: { mean: 2200, sd: 350 }     # median > 1800 -> red
+      poor_lost_share: { mean: 0.30, sd: 0.08 }  # > 0.20 -> red
+      ungraceful_rate: 0.22                   # > 0.20 -> at-risk
+      error_rate: 0.03
+      this_week_error_rate: 0.10              # ~3x baseline -> at-risk
+
+  # ---- Near ceiling: healthy quality, usage >90% of plan and rising ------
+  - account_id: hooli
+    name: Hooli Inc
+    plan_minutes_limit: 2000                  # deliberately tight
+    plan_concurrency_limit: 8
+    profile:
+      kind: near_ceiling
+      sessions_per_day: [11, 15]
+      this_week_sessions_per_day: [18, 24]    # and rising
+      minutes_per_session: [12, 18]
+      latency_ms: { mean: 780, sd: 120 }
+      poor_lost_share: { mean: 0.02, sd: 0.01 }
+      ungraceful_rate: 0.03
+      error_rate: 0.01
+
+  # ---- The real account: healthy synthetic history + 4 real turn rows ----
+  - account_id: acme-corp
+    name: Acme Corp
+    plan_minutes_limit: 15000
+    plan_concurrency_limit: 40
+    profile:
+      kind: healthy
+      sessions_per_day: [3, 7]
+      latency_ms: { mean: 760, sd: 150 }
+      poor_lost_share: { mean: 0.02, sd: 0.02 }
+      ungraceful_rate: 0.04
+      error_rate: 0.01

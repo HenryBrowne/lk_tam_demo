@@ -467,6 +467,15 @@ llm_tokens_in=104  llm_tokens_out=46  error_flag=0
   `InterruptionMetrics` (it briefly thinks the caller barged in). Cosmetic; real
   human turns won't do this.
 
+### Phase 3 note
+
+- **`lk` (the LiveKit CLI) is not installed in this environment**, so
+  `scripts/load_test.sh` is written and its preflight is exercised, but a real
+  `lk load-test` run has not happened. The Phase 3 portfolio table is populated by
+  `scripts/simulate_accounts.py` (synthetic, deterministic) plus the real
+  `acme-corp` turns from the Phase 2 checkpoint (which reach `sessions` via the
+  fallback-synthesis path in `pipeline/sessions.py`).
+
 ---
 
 ## Summary — what's solid vs what needs the Phase 2 run

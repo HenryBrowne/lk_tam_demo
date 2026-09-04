@@ -1,0 +1,53 @@
+# =============================================================================
+# ILLUSTRATIVE thresholds. The scoring FRAMEWORK is the deliverable here, not
+# these numbers. With a real account you would co-own this file with the
+# customer: set the latency bar to their product's SLO, the usage bar to their
+# contract, and revisit it every QBR. Nothing below is a LiveKit benchmark.
+# =============================================================================
+
+session:
+  # median total_latency_ms across the turns in a session
+  latency_ms:
+    green_below: 900
+    amber_below: 1800        # >= 1800 is red
+  # fraction of session-seconds spent at connection quality poor|lost
+  quality_share:
+    green_below: 0.05
+    amber_below: 0.20        # >= 0.20 is red
+  # stability: red if the session ended ungracefully OR was shorter than this
+  stability:
+    min_session_seconds: 10
+
+account:
+  window_days: 7             # "this week" vs the "prior week" before it
+
+  # share of a week's sessions that scored red or amber (amber-heavy accounts get
+  # Watch; it takes a lot of outright-red sessions to reach At-risk on this signal)
+  red_amber_session_share:
+    watch_above: 0.18
+    at_risk_above: 0.40
+
+  # p95 turn TTFT this week vs last week, as a fractional increase.
+  # min_abs_ms: ignore the ratio when the absolute p95 is trivially small.
+  ttft_p95_regression:
+    watch_pct: 0.15
+    at_risk_pct: 0.30        # the spec's "+30% => regression flag"
+    min_abs_ms: 250
+
+  # this week's error rate as a multiple of the prior-week baseline.
+  # min_abs: a 2x jump on a 0.3% rate is noise - only score it once the absolute
+  # rate clears this floor.
+  error_rate_vs_baseline:
+    watch_mult: 1.3
+    at_risk_mult: 2.0
+    min_abs: 0.03
+
+  # share of a week's sessions that ended ungracefully
+  ungraceful_share:
+    watch_above: 0.10
+    at_risk_above: 0.20
+
+  # session-minutes or peak concurrency as a fraction of the plan limit
+  usage_vs_plan:
+    warn_pct: 0.75           # surface it
+    expansion_pct: 0.90      # >= this AND rising => "expansion signal"

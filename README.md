@@ -28,7 +28,14 @@ Built in phases; this is a checkpointed build.
       Cloud and 4 `turn_metrics` + 2 `quality_events` rows landed with real latency /
       token numbers. Webhook path verified offline (self-signed token); live webhook
       delivery still needs a tunnel + dashboard config. See `NOTES-livekit-api.md`.
-- [ ] Phase 3 — Pipeline (derive sessions, scoring, rollups, simulator, load test)
+- [x] **Phase 3 — Pipeline.** `pipeline/sessions.py` derives the `sessions` table
+      from `events` (with a fallback for real calls that have no events yet);
+      `pipeline/scoring.py` holds the deterministic session + account verdicts;
+      thresholds live in `pipeline/thresholds.yaml` behind an ILLUSTRATIVE banner;
+      `pipeline/rollups.py` rolls sessions up per account (trailing 7d vs prior 7d)
+      and `python -m pipeline.rollups` prints the portfolio table.
+      `scripts/simulate_accounts.py` seeds 5 accounts (one At-risk, one near its plan
+      ceiling) with backdated telemetry; `scripts/load_test.sh` wraps `lk load-test`.
 - [ ] Phase 4 — Streamlit dashboard
 - [ ] Phase 5 — LLM account brief
 - [ ] Phase 6 — Write-up (this file + `DESIGN.md` get their full content here)
@@ -92,6 +99,30 @@ python scripts/sim_call.py --account acme-corp
 
 # 4. see telemetry land
 python -m pipeline.db          # row counts + newest events / turn_metrics / quality_events
+```
+
+## Running the pipeline (Phase 3)
+
+```bash
+python scripts/simulate_accounts.py --seed 42   # seed 5 accounts + ~14d of backdated telemetry
+python -m pipeline.sessions                      # (re)derive the sessions table
+python -m pipeline.rollups                       # print the portfolio table
+
+# optional: portfolio-scale load on LiveKit (needs `lk` + the receiver reachable)
+scripts/load_test.sh globex
+```
+
+`pipeline.rollups` runs `derive_sessions()` itself, so after a re-simulate you can just
+re-run it. Sample output:
+
+```
+ACCOUNT             VERDICT  TREND  SESS  RED/AMBER  p95 TTFT (WoW)  ERR vs base  USAGE min/conc  TOP REASON
+------------------  -------  -----  ----  ---------  --------------  -----------  --------------  ---------------------------------------------
+Initech LLC         At-risk  →      40    100%       1.2s (+4%)      10% (2.9x)   3% / 10%        100% of sessions red/amber (vs 100%)
+Globex Corporation  Watch    ↑      53    25%        0.5s (+25%)     1% (0.8x)    3% / 7%         p95 TTFT +25% WoW (0.4s->0.5s)
+Hooli Inc           Watch    →      130   9%         0.4s (-1%)      1% (0.8x)    97% / 50%       usage 97% of plan and rising - expansion signal
+Acme Corp           Healthy  →      34    15%        0.4s (+12%)     0% (0.0x)    1% / 2%         all signals within thresholds
+Northwind Trading   Healthy  ↑      63    3%         0.4s (-1%)      1% (2.5x)    2% / 4%         all signals within thresholds
 ```
 
 _Full "what I learned about LiveKit", "what I'd build next with real accounts", and
