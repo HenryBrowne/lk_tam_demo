@@ -503,6 +503,28 @@ Added a `source` column (`live`/`sim`) to `events` / `turn_metrics` /
   events). Closing that gap is the tunnel + dashboard-webhook step (option 3 in the
   review), not yet done.
 
+### Second real-call batch (2026-09-04) — stopped early by real quota limits
+
+Ran a larger batch across all 5 account tags (mix of normal and `--degrade`,
+haiku-4-5 agent) to grow the live share further. **Stopped mid-batch** on the
+user's real Cartesia and LiveKit usage alerts arriving live — 95% of Cartesia's
+free-tier monthly credits used (841 remaining), and LiveKit Cloud project
+`TAM_Monitor` at 80% of its concurrent-barge-in-requests/min limit (37 of 45).
+Both are consumed by this kind of synthetic-caller load test (Cartesia TTS runs
+twice per call — once for the caller's synthesized speech, once for the agent's
+reply; LiveKit's barge-in detection runs per session) — real, load-test-driven
+external cost, not a code bug. Killed the agent worker immediately; did not
+attempt `scripts/load_test.sh` / `lk load-test` for the same reason (it would
+consume the same quotas at higher volume).
+
+Final tally: **22 real sessions**, 88 `turn_metrics`, 49 `quality_events` (~3% of
+all rows) across all 5 accounts. This folded in enough real telemetry to also flip
+`globex` to At-risk and `northwind` to Watch (both driven by real p95 TTFT
+regressions) — the portfolio is now 3 At-risk / 2 Watch / 0 Healthy. Getting the
+live share materially higher than ~3% without a real portfolio isn't really
+possible on a free-tier test project; the ceiling here is Cartesia/LiveKit quota,
+not engineering effort.
+
 ---
 
 ## Summary — what's solid vs what needs the Phase 2 run

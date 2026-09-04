@@ -155,6 +155,24 @@ python scripts/sim_call.py --account globex --degrade   # frame drop + jitter + 
 `simulate_accounts.py --reset` never deletes `live` rows (they live under an `RM_`
 room_sid; synthetic rooms are `SIM_`).
 
+### Closing the webhook loop
+
+Until this is done, real calls produce `turn_metrics` / `quality_events` but no
+`events`, so every real session is fallback-synthesised with `graceful_end = NULL`
+and an approximate duration. Wiring the webhook fixes both.
+
+1. Install a tunnel binary — `winget install --id Cloudflare.cloudflared`
+   (or `brew install cloudflared`, or a release from the cloudflared repo).
+2. `python scripts/webhook_dev.py` — starts the receiver on `:8080` **and** the
+   tunnel, then prints a `https://<random>.trycloudflare.com/livekit/webhook` URL.
+   Leave it running.
+3. In the LiveKit Cloud dashboard: **Project → Settings → Webhooks**, add that URL,
+   save. (One time. The `trycloudflare.com` host changes each run — re-paste after
+   a restart, or set up a named cloudflared tunnel for a stable URL.)
+4. Drive a call (`python scripts/sim_call.py --account acme-corp`), then
+   `python scripts/check_webhook.py` — it reports whether `events` rows are
+   arriving and whether real sessions now carry a real graceful/ungraceful verdict.
+
 `pipeline.rollups` runs `derive_sessions()` itself, so after a re-simulate you can just
 re-run it. For the exec brief of one account:
 
@@ -168,15 +186,18 @@ Sample output:
 ```
 ACCOUNT             VERDICT  TREND  SESS  RED/AMBER  p95 TTFT (WoW)  ERR vs base  USAGE min/conc  TOP REASON
 ------------------  -------  -----  ----  ---------  --------------  -----------  --------------  --------------------------------------------------
-Acme Corp           At-risk  ↑      36    19%        0.6s (+55%)     0% (0.0x)    1% / 2%         p95 TTFT +55% WoW (0.4s->0.6s)
-Initech LLC         At-risk  →      40    100%       1.2s (+4%)      10% (2.9x)   3% / 10%        100% of sessions red/amber (vs 100%)
-Globex Corporation  Watch    ↑      55    27%        0.5s (+30%)     1% (0.8x)    3% / 7%         p95 TTFT +30% WoW (0.4s->0.5s)
-Hooli Inc           Watch    →      128   9%         0.4s (-1%)      1% (0.9x)    95% / 50%       usage 95% of plan and rising - expansion signal
-Northwind Trading   Healthy  ↑      61    5%         0.4s (+2%)      1% (2.8x)    2% / 4%         all signals within thresholds
+Acme Corp           At-risk  ↑      39    28%        0.7s (+72%)     0% (0.0x)    1% / 2%         p95 TTFT +72% WoW (0.4s->0.7s)
+Globex Corporation  At-risk  ↑      57    30%        0.6s (+58%)     1% (0.7x)    2% / 7%         p95 TTFT +58% WoW (0.4s->0.6s)
+Initech LLC         At-risk  →      40    100%       1.2s (+4%)      10% (3.1x)   3% / 10%        100% of sessions red/amber (vs 100%)
+Hooli Inc           Watch    ↑      130   12%        0.4s (+1%)      1% (1.0x)    95% / 50%       usage 95% of plan and rising - expansion signal
+Northwind Trading   Watch    ↑      60    8%         0.5s (+22%)     1% (3.0x)    2% / 4%         p95 TTFT +22% WoW (0.4s->0.5s)
 ```
 
-(Acme Corp is At-risk here because its 3 real LiveKit calls this week ran slower
-than its seeded history — real telemetry moving a verdict.)
+(Acme Corp, Globex, and Northwind are all pulled toward worse verdicts here because
+their real LiveKit calls this week ran slower than their seeded history — real
+telemetry moving verdicts, not a coincidence of the simulator. After a second batch
+of real calls, all 5 accounts now carry at least some real sessions and none is
+"clean Healthy" any more — see the live/sim counts below.)
 
 ## What I learned about LiveKit building this
 
@@ -221,8 +242,12 @@ Honest about what I verified against the SDK / a real call vs. what I inferred.
   when a customer's build breaks after an SDK bump.
 - **What's simulated.** I have one LiveKit test project, not a book of accounts, so
   portfolio breadth (`scripts/simulate_accounts.py`) is fabricated and labelled
-  `source = sim`. Six sessions across three accounts are real LiveKit Cloud calls
-  (`source = live`), marked as such throughout the UI.
+  `source = sim`. 22 sessions across all 5 accounts (88 `turn_metrics`, 49
+  `quality_events` — about 3% of rows) are real LiveKit Cloud calls
+  (`source = live`), marked as such throughout the UI. That ratio is a ceiling on
+  how "real" this can get without a real portfolio: a second batch of calls
+  stopped early after hitting real Cartesia free-tier and LiveKit barge-in-rate
+  limits (`python -m pipeline.db` prints current row counts).
 
 ## What I'd build next with access to real accounts
 

@@ -104,7 +104,7 @@ before:
   row: `started_at`/`ended_at` = min/max ts of those rows, `graceful_end = NULL`,
   `n_participants` from distinct non-agent `quality_events` identities. `duration_s`
   here is bounded by metric-flush timestamps, so it under-reads the true call length.
-  All 6 real LiveKit sessions currently land here, so none of them carry a
+  All 22 real LiveKit sessions currently land here, so none of them carry a
   graceful/ungraceful verdict yet — that needs the webhook path.
 - **Peak concurrency** = max overlap of session `[start, end]` spans in the window
   (sweep line, `pipeline/rollups.py::_peak_concurrency`). A reconstruction from
