@@ -59,6 +59,20 @@ surface. At the *design* level:
   row: `started_at`/`ended_at` = min/max ts of those rows, `graceful_end = NULL`,
   `n_participants` from distinct non-agent `quality_events` identities. `duration_s`
   here is bounded by metric-flush timestamps, so it under-reads the true call length.
+  All 6 real LiveKit sessions currently land here, so none of them carry a
+  graceful/ungraceful verdict yet — that needs the webhook path.
+
+## Live vs simulated rows (`source` column)
+
+Every telemetry row (`events`, `turn_metrics`, `quality_events`, `sessions`) carries
+`source`: `live` (a real LiveKit Cloud call — agent worker joined a real room, real
+`metrics_collected` / `connection_quality_changed` captured) or `sim`
+(`scripts/simulate_accounts.py`). The simulator exists only because there is one
+real LiveKit test project, not a portfolio; the scoring framework is identical for
+both. The dashboard surfaces the split so a reviewer can see exactly which numbers
+are real. Real calls are deliberately mixed into seeded accounts (`acme-corp`,
+`globex`, `northwind`) — with real telemetry folded in, `acme-corp`'s verdict moves
+because its live calls run slower than its simulated history.
 - **Peak concurrency** = max overlap of session `[start, end]` spans in the window
   (sweep line, `pipeline/rollups.py::_peak_concurrency`).
 

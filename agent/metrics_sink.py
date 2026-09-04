@@ -92,8 +92,8 @@ class MetricsSink:
             """
             INSERT INTO turn_metrics (ts, room_sid, account_id, speech_id, ttft_ms,
                                       ttfb_ms, eou_ms, total_latency_ms, llm_tokens_in,
-                                      llm_tokens_out, error_flag)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      llm_tokens_out, error_flag, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live')
             """,
             (
                 iso(), self._state.get("room_sid"), self._state.get("account_id"),
@@ -117,8 +117,8 @@ class MetricsSink:
         label = _QUALITY_MAP.get(getattr(quality, "name", str(quality)), "unknown")
         self._conn.execute(
             """
-            INSERT INTO quality_events (ts, room_sid, account_id, participant_id, quality)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO quality_events (ts, room_sid, account_id, participant_id, quality, source)
+            VALUES (?, ?, ?, ?, ?, 'live')
             """,
             (
                 iso(), self._state.get("room_sid"), self._state.get("account_id"),

@@ -81,6 +81,7 @@ def _session_from_events(room_sid: str, rows: list[sqlite3.Row]) -> dict:
         "duration_s": _secs(started_at, ended_at),
         "graceful_end": graceful,
         "n_participants": len(humans) or 1,
+        "source": "live" if any(r["source"] == "live" for r in rows) else "sim",
     }
 
 
@@ -105,6 +106,13 @@ def _session_fallback(room_sid: str, conn: sqlite3.Connection) -> dict:
         ).fetchall()
         if p[0] and not _is_agent(p[0])
     }
+    src = conn.execute(
+        """
+        SELECT source FROM turn_metrics WHERE room_sid = :r
+        UNION SELECT source FROM quality_events WHERE room_sid = :r
+        """,
+        {"r": room_sid},
+    ).fetchall()
     return {
         "room_sid": room_sid,
         "account_id": row["acc1"] or row["acc2"],
@@ -113,6 +121,7 @@ def _session_fallback(room_sid: str, conn: sqlite3.Connection) -> dict:
         "duration_s": _secs(row["start_ts"], row["end_ts"]),
         "graceful_end": None,  # unknown without events
         "n_participants": len(parts) or 1,
+        "source": "live" if any(r[0] == "live" for r in src) else "sim",
     }
 
 
@@ -142,9 +151,9 @@ def derive_sessions(conn: sqlite3.Connection) -> int:
     conn.executemany(
         """
         INSERT INTO sessions (room_sid, account_id, started_at, ended_at, duration_s,
-                              graceful_end, n_participants)
+                              graceful_end, n_participants, source)
         VALUES (:room_sid, :account_id, :started_at, :ended_at, :duration_s,
-                :graceful_end, :n_participants)
+                :graceful_end, :n_participants, :source)
         """,
         sessions,
     )

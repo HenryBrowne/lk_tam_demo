@@ -187,19 +187,19 @@ def simulate(seed: int, days: int, reset: bool) -> None:
                 n_sessions += 1
 
         conn.executemany(
-            "INSERT INTO events (ts, type, room_sid, room_name, account_id, participant_id, raw_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO events (ts, type, room_sid, room_name, account_id, participant_id, raw_json, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'sim')",
             ev_all,
         )
         conn.executemany(
             "INSERT INTO turn_metrics (ts, room_sid, account_id, speech_id, ttft_ms, ttfb_ms, "
-            "eou_ms, total_latency_ms, llm_tokens_in, llm_tokens_out, error_flag) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "eou_ms, total_latency_ms, llm_tokens_in, llm_tokens_out, error_flag, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sim')",
             turn_all,
         )
         conn.executemany(
-            "INSERT INTO quality_events (ts, room_sid, account_id, participant_id, quality) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO quality_events (ts, room_sid, account_id, participant_id, quality, source) "
+            "VALUES (?, ?, ?, ?, ?, 'sim')",
             qual_all,
         )
         conn.commit()

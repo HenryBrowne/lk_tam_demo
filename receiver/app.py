@@ -78,8 +78,8 @@ async def livekit_webhook(
         conn.execute(
             """
             INSERT INTO events (ts, type, room_sid, room_name, account_id,
-                                participant_id, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                                participant_id, raw_json, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'live')
             """,
             (
                 iso(event.created_at or None),

@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import uuid
 import urllib.request
 
@@ -71,23 +72,30 @@ def cartesia_pcm(text: str) -> bytes:
         return resp.read()
 
 
-async def _push(source: rtc.AudioSource, pcm: bytes) -> None:
+async def _push(source: rtc.AudioSource, pcm: bytes, drop_rate: float = 0.0,
+                jitter_ms: float = 0.0, rng: random.Random | None = None) -> None:
     """Feed PCM to the track one 10 ms frame at a time. capture_frame() blocks
-    when the internal queue is full, which paces this at ~real time."""
+    when the internal queue is full, which paces this at ~real time.
+    drop_rate/jitter_ms simulate packet loss and jitter for --degrade."""
     for i in range(0, len(pcm), BYTES_PER_FRAME):
+        if drop_rate and rng and rng.random() < drop_rate:
+            continue  # "packet loss": drop this frame
         chunk = pcm[i : i + BYTES_PER_FRAME]
         if len(chunk) < BYTES_PER_FRAME:
             chunk = chunk + b"\x00" * (BYTES_PER_FRAME - len(chunk))
         await source.capture_frame(
             rtc.AudioFrame(chunk, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME)
         )
+        if jitter_ms and rng and (i // BYTES_PER_FRAME) % 8 == 0:
+            await asyncio.sleep(rng.uniform(0, jitter_ms / 1000))
 
 
 async def _silence(source: rtc.AudioSource, ms: int) -> None:
     await _push(source, b"\x00" * (BYTES_PER_FRAME * (ms // FRAME_MS)))
 
 
-async def run(account: str, room_name: str, gap_s: float, n_turns: int) -> None:
+async def run(account: str, room_name: str, gap_s: float, n_turns: int,
+              degrade: bool = False) -> None:
     url = os.environ["LIVEKIT_URL"]
     key = os.environ["LIVEKIT_API_KEY"]
     secret = os.environ["LIVEKIT_API_SECRET"]
@@ -144,15 +152,27 @@ async def run(account: str, room_name: str, gap_s: float, n_turns: int) -> None:
 
     await asyncio.sleep(3)  # let the agent deliver its greeting
 
+    rng = random.Random(hash(room_name) & 0xFFFF)
+    drop = 0.18 if degrade else 0.0
+    jit = 35.0 if degrade else 0.0
+    if degrade:
+        print("  DEGRADE: ~18% frame drop, up to 35ms jitter, barge-in, abrupt end")
+
     # 5. speak the turns, leaving a gap for the agent to answer each
     for i, pcm in enumerate(pcms, 1):
         secs = len(pcm) / 2 / SAMPLE_RATE
         print(f"turn {i}/{len(pcms)}: speaking {secs:.1f}s ...")
         await _silence(source, 300)
-        await _push(source, pcm)
-        await _silence(source, 500)
-        await source.wait_for_playout()
-        await asyncio.sleep(gap_s)
+        await _push(source, pcm, drop, jit, rng)
+        await _silence(source, 300 if degrade else 500)
+        if not degrade:
+            await source.wait_for_playout()
+        await asyncio.sleep(gap_s * (0.4 if degrade else 1.0))  # degrade => talk over the agent
+
+    if degrade:
+        await asyncio.sleep(1)
+        print("caller dropping the connection abruptly (ungraceful).")
+        os._exit(0)  # no leave message -> LiveKit sees an aborted connection
 
     await asyncio.sleep(2)
     await room.disconnect()      # graceful end
@@ -165,10 +185,13 @@ def main() -> None:
     ap.add_argument("--room", default=None, help="room name (default: sim-<account>-<rand>)")
     ap.add_argument("--gap", type=float, default=7.0, help="seconds to wait after each turn (default: 7)")
     ap.add_argument("--turns", type=int, default=len(DEFAULT_UTTERANCES), help="number of turns (max 3)")
+    ap.add_argument("--degrade", action="store_true",
+                    help="inject frame drop + jitter + barge-in and end abruptly (a rough call)")
     args = ap.parse_args()
 
     room_name = args.room or f"sim-{args.account}-{uuid.uuid4().hex[:6]}"
-    asyncio.run(run(args.account, room_name, args.gap, max(1, min(args.turns, len(DEFAULT_UTTERANCES)))))
+    asyncio.run(run(args.account, room_name, args.gap,
+                    max(1, min(args.turns, len(DEFAULT_UTTERANCES))), args.degrade))
 
 
 if __name__ == "__main__":

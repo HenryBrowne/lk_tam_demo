@@ -147,6 +147,7 @@ def scored_sessions(conn: sqlite3.Connection) -> pd.DataFrame:
                 "duration_s": s.duration_s,
                 "graceful_end": s.graceful_end,
                 "n_participants": s.n_participants,
+                "source": getattr(s, "source", "sim"),
                 "median_latency_ms": median_lat,
                 "poor_lost_share": share,
                 "verdict": sv.verdict,

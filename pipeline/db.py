@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 
 -- Raw LiveKit webhook events, one row per delivery.
+-- source: 'live' = a real LiveKit Cloud webhook; 'sim' = scripts/simulate_accounts.py
 CREATE TABLE IF NOT EXISTS events (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     ts              TEXT NOT NULL,          -- ISO-8601 UTC
@@ -33,7 +34,8 @@ CREATE TABLE IF NOT EXISTS events (
     room_name       TEXT,
     account_id      TEXT,
     participant_id  TEXT,
-    raw_json        TEXT NOT NULL           -- the exact verified webhook body
+    raw_json        TEXT NOT NULL,          -- the exact verified webhook body
+    source          TEXT NOT NULL DEFAULT 'sim'
 );
 CREATE INDEX IF NOT EXISTS ix_events_account_ts ON events (account_id, ts);
 CREATE INDEX IF NOT EXISTS ix_events_room       ON events (room_sid);
@@ -53,7 +55,8 @@ CREATE TABLE IF NOT EXISTS turn_metrics (
     total_latency_ms  REAL,                 -- derived, see DESIGN.md
     llm_tokens_in     INTEGER,
     llm_tokens_out    INTEGER,
-    error_flag        INTEGER NOT NULL DEFAULT 0
+    error_flag        INTEGER NOT NULL DEFAULT 0,
+    source            TEXT NOT NULL DEFAULT 'sim'   -- 'live' = a real agent call
 );
 CREATE INDEX IF NOT EXISTS ix_turn_account_ts ON turn_metrics (account_id, ts);
 CREATE INDEX IF NOT EXISTS ix_turn_room       ON turn_metrics (room_sid);
@@ -65,7 +68,8 @@ CREATE TABLE IF NOT EXISTS quality_events (
     room_sid        TEXT,
     account_id      TEXT,
     participant_id  TEXT,
-    quality         TEXT NOT NULL           -- excellent | good | poor | lost | unknown
+    quality         TEXT NOT NULL,          -- excellent | good | poor | lost | unknown
+    source          TEXT NOT NULL DEFAULT 'sim'
 );
 CREATE INDEX IF NOT EXISTS ix_quality_account_ts ON quality_events (account_id, ts);
 CREATE INDEX IF NOT EXISTS ix_quality_room       ON quality_events (room_sid);
@@ -78,10 +82,19 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at        TEXT,
     duration_s      REAL,
     graceful_end    INTEGER,                -- 1 / 0 / NULL if unknown
-    n_participants  INTEGER
+    n_participants  INTEGER,
+    source          TEXT NOT NULL DEFAULT 'sim'   -- 'live' if any underlying row is live
 );
 CREATE INDEX IF NOT EXISTS ix_sessions_account ON sessions (account_id, started_at);
 """
+
+# Columns added after tables shipped; connect() backfills existing DBs.
+_ADDED_COLUMNS = {
+    "events": [("source", "TEXT NOT NULL DEFAULT 'sim'")],
+    "turn_metrics": [("source", "TEXT NOT NULL DEFAULT 'sim'")],
+    "quality_events": [("source", "TEXT NOT NULL DEFAULT 'sim'")],
+    "sessions": [("source", "TEXT NOT NULL DEFAULT 'sim'")],
+}
 
 TABLES = ["accounts", "events", "turn_metrics", "quality_events", "sessions"]
 
@@ -115,8 +128,24 @@ def connect(db_path: str | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns that shipped after their table, and backfill the real rows
+    written before `source` existed (a room_sid like 'RM_...' is a real LiveKit
+    room; 'SIM_...' is synthetic)."""
+    for table, cols in _ADDED_COLUMNS.items():
+        existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+                if name == "source":
+                    conn.execute(
+                        f"UPDATE {table} SET source = 'live' WHERE room_sid GLOB 'RM_*'"
+                    )
 
 
 def summarise(db_path: str | None = None) -> str:

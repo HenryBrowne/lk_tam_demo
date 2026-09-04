@@ -476,6 +476,33 @@ llm_tokens_in=104  llm_tokens_out=46  error_flag=0
   `acme-corp` turns from the Phase 2 checkpoint (which reach `sessions` via the
   fallback-synthesis path in `pipeline/sessions.py`).
 
+### Real-call batch (2026-09-04, after the "no interaction with LiveKit" review)
+
+Added a `source` column (`live`/`sim`) to `events` / `turn_metrics` /
+`quality_events` / `sessions`, then ran a batch of real calls via
+`scripts/sim_call.py` against a live agent worker on `tam-monitor`:
+
+- **6 real LiveKit Cloud sessions**, 22 `turn_metrics` + 13 `quality_events` rows,
+  across `acme-corp` (×3), `globex` (×2), `northwind` (×1). Each is a real room
+  created via the server API, a real RTC audio publish, a real agent job dispatch,
+  and real `metrics_collected` / `connection_quality_changed` events.
+- Observed real numbers:
+  - `claude-haiku-4-5` TTFT ~0.6–0.7 s; **`claude-sonnet-4-6` TTFT ~1.1 s** on the
+    same pipeline (used for the `--degrade` call — a genuine, measurable slowdown).
+  - EOU delay held ~0.58 s (turn-detector-v1) on clean calls; one choppy call
+    showed ~1.2 s avg EOU.
+  - `--degrade` (18% frame drop + 35 ms jitter + barge-in + `os._exit`) produced two
+    real turns at ~2.1 s total latency (red). The abrupt end and the interrupted
+    greeting are **not** captured as `error_flag` / ungraceful, because (a) the hard
+    exit skips the sink's shutdown flush and (b) ungraceful-end detection needs the
+    webhook `events` path, which is still not live.
+- These 6 live sessions **change two account verdicts**: with real telemetry folded
+  in, `acme-corp` moves Healthy → At-risk (p95 TTFT +55% WoW vs its simulated
+  baseline) and `globex` stays Watch but now partly on real data.
+- Live sessions still get `graceful_end = NULL` (fallback-synthesised, no webhook
+  events). Closing that gap is the tunnel + dashboard-webhook step (option 3 in the
+  review), not yet done.
+
 ---
 
 ## Summary — what's solid vs what needs the Phase 2 run
