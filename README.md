@@ -36,7 +36,12 @@ Built in phases; this is a checkpointed build.
       and `python -m pipeline.rollups` prints the portfolio table.
       `scripts/simulate_accounts.py` seeds 5 accounts (one At-risk, one near its plan
       ceiling) with backdated telemetry; `scripts/load_test.sh` wraps `lk load-test`.
-- [ ] Phase 4 — Streamlit dashboard
+- [x] **Phase 4 — Dashboard.** `dashboard/streamlit_app.py` — a portfolio overview
+      (KPI tiles, the account table with verdict / trend / top reason / usage bars,
+      the signal→action key) and a per-account drill-down (signal cards paired with
+      the TAM action, session-timeline scatter, latency histogram this-week-vs-prior,
+      connection-quality seconds by level, turn-detail table, token cost). Reuses
+      `pipeline.scoring` / `pipeline.rollups` so the numbers match the CLI.
 - [ ] Phase 5 — LLM account brief
 - [ ] Phase 6 — Write-up (this file + `DESIGN.md` get their full content here)
 
@@ -111,6 +116,16 @@ python -m pipeline.rollups                       # print the portfolio table
 # optional: portfolio-scale load on LiveKit (needs `lk` + the receiver reachable)
 scripts/load_test.sh globex
 ```
+
+## Running the dashboard (Phase 4)
+
+```bash
+streamlit run dashboard/streamlit_app.py
+```
+
+Portfolio overview by default; pick an account in the sidebar for the drill-down.
+"↻ Refresh data" re-reads the DB (run `simulate_accounts.py` / talk to the agent,
+then refresh). Reads `data/portfolio.db` — seed it first with `simulate_accounts.py`.
 
 `pipeline.rollups` runs `derive_sessions()` itself, so after a re-simulate you can just
 re-run it. Sample output:

@@ -90,50 +90,55 @@ class AccountRollup:
     error_rate_prev: float
     usage_minutes_pct: float | None
     usage_concurrency_pct: float | None
+    signals: list = None  # list[pipeline.scoring.Signal]; filled by account_rollup
 
 
-def account_rollup(conn: sqlite3.Connection) -> list[AccountRollup]:
-    th = load_thresholds()
+def load_frames(conn: sqlite3.Connection) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """(sessions, turns, quality, accounts) with datetime columns parsed. Shared by
+    the rollup and the dashboard."""
     sessions = pd.read_sql_query("SELECT * FROM sessions", conn)
     turns = pd.read_sql_query("SELECT * FROM turn_metrics", conn)
     quality = pd.read_sql_query("SELECT * FROM quality_events", conn)
     accounts = pd.read_sql_query("SELECT * FROM accounts", conn)
-
-    if sessions.empty:
-        return []
-
-    for df, cols in [
-        (sessions, ["started_at", "ended_at"]),
-        (turns, ["ts"]),
-        (quality, ["ts"]),
-    ]:
+    for df, cols in [(sessions, ["started_at", "ended_at"]), (turns, ["ts"]), (quality, ["ts"])]:
         for c in cols:
             df[c] = pd.to_datetime(df[c], format=_TS_FMT, errors="coerce")
+    return sessions, turns, quality, accounts
 
-    # "now" and the two week windows
-    now = max(
-        [t for t in [sessions["ended_at"].max(), turns["ts"].max(), quality["ts"].max()] if pd.notna(t)]
-    )
-    wd = int(th["account"]["window_days"])
-    this_lo, prev_lo = now - timedelta(days=wd), now - timedelta(days=2 * wd)
 
-    plans = accounts.set_index("account_id").to_dict("index")
+def data_now(sessions: pd.DataFrame, turns: pd.DataFrame, quality: pd.DataFrame) -> pd.Timestamp | None:
+    """'Now' = the latest timestamp in the data, so backdated synthetic rows line
+    up with the week windows."""
+    end_col = "ended_at" if "ended_at" in sessions.columns else "started_at"
+    cands = [
+        sessions[end_col].max() if not sessions.empty else pd.NaT,
+        turns["ts"].max() if not turns.empty else pd.NaT,
+        quality["ts"].max() if not quality.empty else pd.NaT,
+    ]
+    cands = [t for t in cands if pd.notna(t)]
+    return max(cands) if cands else None
 
-    # score every session
-    srows = []
+
+def scored_sessions(conn: sqlite3.Connection) -> pd.DataFrame:
+    """One row per session with its median latency, poor|lost second-share, and
+    the session verdict + sub-verdicts. Used by both account_rollup and the
+    dashboard timeline."""
+    th = load_thresholds()
+    sessions, turns, quality, _ = load_frames(conn)
+    if sessions.empty:
+        return pd.DataFrame()
+
+    rows = []
     for s in sessions.itertuples(index=False):
         room_turns = turns[turns["room_sid"] == s.room_sid]
         room_q = quality[quality["room_sid"] == s.room_sid]
-        median_lat = (
-            float(room_turns["total_latency_ms"].median())
-            if not room_turns["total_latency_ms"].dropna().empty
-            else None
-        )
+        lat = room_turns["total_latency_ms"].dropna()
+        median_lat = float(lat.median()) if not lat.empty else None
         start = s.started_at if pd.notna(s.started_at) else None
         end = s.ended_at if pd.notna(s.ended_at) else None
         share = _poor_lost_share(room_q, start, end) if (start and end) else 0.0
         sv = session_verdict(median_lat, share, s.graceful_end, s.duration_s, th)
-        srows.append(
+        rows.append(
             {
                 "account_id": s.account_id,
                 "room_sid": s.room_sid,
@@ -141,10 +146,29 @@ def account_rollup(conn: sqlite3.Connection) -> list[AccountRollup]:
                 "ended_at": end,
                 "duration_s": s.duration_s,
                 "graceful_end": s.graceful_end,
+                "n_participants": s.n_participants,
+                "median_latency_ms": median_lat,
+                "poor_lost_share": share,
                 "verdict": sv.verdict,
+                "latency_v": sv.latency,
+                "quality_v": sv.quality,
+                "stability_v": sv.stability,
             }
         )
-    scored = pd.DataFrame(srows)
+    return pd.DataFrame(rows)
+
+
+def account_rollup(conn: sqlite3.Connection) -> list[AccountRollup]:
+    th = load_thresholds()
+    _, turns, quality, accounts = load_frames(conn)
+    scored = scored_sessions(conn)
+    if scored.empty:
+        return []
+
+    now = data_now(scored, turns, quality)
+    wd = int(th["account"]["window_days"])
+    this_lo, prev_lo = now - timedelta(days=wd), now - timedelta(days=2 * wd)
+    plans = accounts.set_index("account_id").to_dict("index")
 
     out: list[AccountRollup] = []
     account_ids = sorted(set(scored["account_id"].dropna()) | set(accounts["account_id"]))
@@ -212,6 +236,7 @@ def account_rollup(conn: sqlite3.Connection) -> list[AccountRollup]:
                 error_rate_prev=m.error_rate_prev,
                 usage_minutes_pct=m.usage_minutes_pct,
                 usage_concurrency_pct=m.usage_concurrency_pct,
+                signals=score.signals,
             )
         )
 
