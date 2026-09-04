@@ -348,6 +348,57 @@ if __name__ == "__main__":
 
 ---
 
+## Phase 2 verification update (2026-09-04)
+
+Built the ingest layer. What got *proven* (not just read):
+
+- **Webhook verify flow — proven end-to-end.** A test signs a body with
+  `AccessToken(key, secret).with_sha256(b64(sha256(body))).to_jwt()` and posts it to
+  the FastAPI receiver via `TestClient`. Results:
+  - valid token + matching hash -> `WebhookReceiver.receive()` returns the parsed
+    `WebhookEvent`, row written to `events`. ✅
+  - garbage `Authorization` -> `receive()` raises -> receiver returns 401. ✅
+  - valid signature but body mutated by one byte after signing -> `receive()` raises
+    `"hash mismatch"` -> 401. ✅
+  - `event.HasField("room")` / `event.HasField("participant")` are the right guards
+    (protobuf) before reading those sub-messages.
+  - account tagging: `{"account_id": "globex"}` in `room.metadata` resolves; with no
+    metadata, `acct-initech__caller-9` -> `initech` via the identity fallback. ✅
+- **Metric object shapes — proven by construction.** `EOUMetrics`, `LLMMetrics`,
+  `STTMetrics`, `TTSMetrics` are pydantic models importable from
+  `livekit.agents.metrics`; constructing them with the fields listed in section 2 and
+  running them through `MetricsSink` produces correct `turn_metrics` rows (ms
+  conversion, `ttft=-1` -> NULL, `total_latency_ms` = sum of available parts,
+  `cancelled` -> `error_flag`). `STTMetrics` has no `speech_id` — confirmed, so it
+  can't be tied to a turn; usage totals will come from `session_usage_updated`.
+- **`MetricsCollectedEvent`** imports from `livekit.agents` (not `.metrics`); shape
+  `{type, metrics, created_at}`. ✅
+- **`AgentSession.start(agent, *, room=, record=, ...)`** — `room_input_options` /
+  `room_output_options` are now deprecated in favour of `room_options`. Passing
+  `record=False` to avoid egress on the free tier.
+- **`rtc.Room.sid` is a coroutine** (`await ctx.room.sid`), not a property.
+- **Default turn detector is safe to leave unset.** `livekit.agents.inference.TurnDetector`
+  (the non-deprecated path; `livekit-plugins-turn-detector` is deprecated) auto-selects:
+  LiveKit Cloud inference when `LIVEKIT_INFERENCE_URL` + key/secret are present (they
+  are, on a hosted run), else it downloads a local ~108 MB `v1-mini` model, else it
+  commits turns on the endpointing delay. It never hard-fails in `auto` mode.
+  `EOUMetrics` fires in all three cases.
+- **Deprecated:** `livekit.plugins.turn_detector` warns on import — noted; not used.
+  `Agent(turn_detection=...)` / `AgentSession(turn_detection=...)` are deprecated in
+  favour of `turn_handling=TurnHandlingOptions(...)`.
+
+Still **not** verified (needs a live LiveKit Cloud run — the Phase 2 checkpoint):
+
+- That a real `metrics_collected` stream from Deepgram + Claude + Cartesia populates
+  `ttft` / `ttfb` / `end_of_utterance_delay` with real numbers (not zeros), and that
+  EOU/LLM/TTS actually share one `speech_id` per turn (the sink assumes this).
+- Whether the agent receives `connection_quality_changed` for the **remote** human
+  participant (vs only itself).
+- Whether LiveKit Cloud sends `disconnect_reason` on the `participant_left` webhook.
+- Exact `cli.run_app` / worker registration behaviour against the real project.
+
+---
+
 ## Summary — what's solid vs what needs the Phase 2 run
 
 **Solid (read straight from installed source + confirmed in docs):**

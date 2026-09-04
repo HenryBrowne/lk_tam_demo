@@ -20,7 +20,11 @@ Built in phases; this is a checkpointed build.
 
 - [x] **Phase 1 — Scaffold + LiveKit API verification.** Repo, pinned venv,
       `.env.example`, `NOTES-livekit-api.md` (verified-vs-assumed API surface).
-- [ ] Phase 2 — Ingest (webhook receiver + agent metrics hook -> SQLite)
+- [~] **Phase 2 — Ingest.** Webhook receiver (`receiver/app.py`, JWT + body-hash
+      verify -> `events`) and voice agent + metrics hook (`agent/`, `metrics_collected`
+      / `connection_quality_changed` -> `turn_metrics`, `quality_events`). SQLite
+      schema in `pipeline/db.py`. Verify flow and metric-assembly are unit-tested;
+      **live "talk to the agent" checkpoint pending keys.**
 - [ ] Phase 3 — Pipeline (derive sessions, scoring, rollups, simulator, load test)
 - [ ] Phase 4 — Streamlit dashboard
 - [ ] Phase 5 — LLM account brief
@@ -57,6 +61,35 @@ copy .env.example .env            # then fill in keys
 
 You need: a LiveKit Cloud project (URL / API key / secret), an Anthropic API key,
 and Deepgram + Cartesia keys for the voice agent. See `.env.example`.
+
+## Running the ingest layer (Phase 2)
+
+All commands run from the repo root with the venv active.
+
+```bash
+python -m pipeline.db          # create data/portfolio.db and print a summary
+
+# 1. webhook receiver
+python -m receiver.app         # listens on RECEIVER_PORT (default 8080)
+```
+
+Point your LiveKit project's webhook at the receiver. It needs a public URL, so for
+local dev tunnel it (`cloudflared tunnel --url http://localhost:8080`, `ngrok http
+8080`, or `lk`'s own forwarding), then in the LiveKit Cloud dashboard set
+**Project → Settings → Webhooks** to `https://<tunnel>/livekit/webhook`.
+
+```bash
+# 2. voice agent (separate terminal)
+python -m agent.main dev       # registers with LIVEKIT_URL, waits for a room
+#   first run may download a ~108MB local turn-detector model
+
+# 3. talk to it
+#   open https://agents-playground.livekit.io, connect it to your project,
+#   join a room and speak — or:  lk room join --publish-mic --identity me <room>
+
+# 4. see telemetry land
+python -m pipeline.db          # row counts + newest events / turn_metrics / quality_events
+```
 
 _Full "what I learned about LiveKit", "what I'd build next with real accounts", and
 time-spent notes land here in Phase 6._
