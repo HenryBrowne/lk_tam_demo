@@ -1,9 +1,11 @@
 # Portfolio Signal
 
 A Technical-Account-Manager instrument panel built on LiveKit session telemetry.
-It ingests LiveKit webhooks + voice-agent metrics, rolls them up **per account**,
-scores account health with deterministic rules, and surfaces a portfolio overview,
-a per-account drill-down, and an auto-drafted exec "account brief".
+It ingests LiveKit voice-agent metrics from real calls (plus a webhook receiver for
+room/participant events), rolls them up **per account**, scores account health with
+deterministic rules, and surfaces a portfolio overview, a per-account drill-down,
+and an auto-drafted exec "account brief". The point isn't the dashboard — it's that
+every number on it maps to a specific thing a TAM would do next.
 
 > **Framing:** I built this over a few days with no prior LiveKit exposure, as a
 > portfolio piece for a TAM application. It's meant to show I ramp on an unfamiliar
@@ -48,7 +50,8 @@ Built in phases; this is a checkpointed build.
       the prose (and the prompt forbids inventing metrics). Surfaced behind a
       "Generate brief" button in the dashboard drill-down; also
       `python -m brief.llm_brief --account <id>` (`--facts-only` for no API call).
-- [ ] Phase 6 — Write-up (this file + `DESIGN.md` get their full content here)
+- [x] **Phase 6 — Write-up.** The three sections below, plus the verified-vs-inferred
+      split and scoring rationale in `DESIGN.md`.
 
 ## Signal -> TAM action
 
@@ -164,13 +167,85 @@ Sample output:
 
 ```
 ACCOUNT             VERDICT  TREND  SESS  RED/AMBER  p95 TTFT (WoW)  ERR vs base  USAGE min/conc  TOP REASON
-------------------  -------  -----  ----  ---------  --------------  -----------  --------------  ---------------------------------------------
+------------------  -------  -----  ----  ---------  --------------  -----------  --------------  --------------------------------------------------
+Acme Corp           At-risk  ↑      36    19%        0.6s (+55%)     0% (0.0x)    1% / 2%         p95 TTFT +55% WoW (0.4s->0.6s)
 Initech LLC         At-risk  →      40    100%       1.2s (+4%)      10% (2.9x)   3% / 10%        100% of sessions red/amber (vs 100%)
-Globex Corporation  Watch    ↑      53    25%        0.5s (+25%)     1% (0.8x)    3% / 7%         p95 TTFT +25% WoW (0.4s->0.5s)
-Hooli Inc           Watch    →      130   9%         0.4s (-1%)      1% (0.8x)    97% / 50%       usage 97% of plan and rising - expansion signal
-Acme Corp           Healthy  →      34    15%        0.4s (+12%)     0% (0.0x)    1% / 2%         all signals within thresholds
-Northwind Trading   Healthy  ↑      63    3%         0.4s (-1%)      1% (2.5x)    2% / 4%         all signals within thresholds
+Globex Corporation  Watch    ↑      55    27%        0.5s (+30%)     1% (0.8x)    3% / 7%         p95 TTFT +30% WoW (0.4s->0.5s)
+Hooli Inc           Watch    →      128   9%         0.4s (-1%)      1% (0.9x)    95% / 50%       usage 95% of plan and rising - expansion signal
+Northwind Trading   Healthy  ↑      61    5%         0.4s (+2%)      1% (2.8x)    2% / 4%         all signals within thresholds
 ```
 
-_Full "what I learned about LiveKit", "what I'd build next with real accounts", and
-time-spent notes land here in Phase 6._
+(Acme Corp is At-risk here because its 3 real LiveKit calls this week ran slower
+than its seeded history — real telemetry moving a verdict.)
+
+## What I learned about LiveKit building this
+
+Honest about what I verified against the SDK / a real call vs. what I inferred.
+`DESIGN.md` and `NOTES-livekit-api.md` have the line-by-line version.
+
+- **Webhook model.** LiveKit signs each webhook as a JWT in the `Authorization`
+  header whose claims carry a `sha256` of the body; you verify with
+  `livekit.api.WebhookReceiver` over the **raw** body bytes (a re-serialised parse
+  fails the hash). Events are `room_started/finished`,
+  `participant_joined/left/connection_aborted`, `track_*`, `egress_*`, `ingress_*`.
+  I verified the helper and the event list; I have **not** run live webhook
+  delivery (that needs a public tunnel + a URL set in the Cloud dashboard), so
+  which `disconnect_reason` values mean "ungraceful" is still an assumption and
+  every real session currently gets `graceful_end = NULL`.
+- **Agent metrics surface.** `AgentSession` emits `metrics_collected` with
+  per-component objects — `LLMMetrics.ttft`, `TTSMetrics.ttfb`,
+  `EOUMetrics.end_of_utterance_delay` / `transcription_delay`, all in **seconds**.
+  In `livekit-agents` 1.7.1 that event still fires but its docstring calls it
+  deprecated for *usage* accounting (→ `session_usage_updated`), and per-turn
+  latency also lives on `ChatMessage.metrics` now — I used `metrics_collected`
+  because it is still the cleanest per-turn source. EOU/LLM/TTS for one turn share
+  a `speech_id`; that is the only thing tying a "turn" together. Confirmed against
+  real calls: haiku-4-5 TTFT ~0.65 s, sonnet-4-6 ~1.1 s.
+- **Connection-quality semantics.** `room.on("connection_quality_changed")` gives
+  `(participant, quality)` with `EXCELLENT/GOOD/POOR/LOST/UNKNOWN`. You get
+  *transitions only* — no continuous sample — so "share of the call at poor/lost"
+  is a step function between events. The agent does receive these for the remote
+  (human) participant, not just itself. From localhost I could never actually
+  provoke `poor`/`lost` on the caller link.
+- **SFU basics (inferred, not expertise).** A room is a selective-forwarding unit:
+  the agent joins as another participant, media goes client → SFU → agent, and the
+  connection-quality reading is the SFU's estimate of each peer's link, not an
+  end-to-end path measurement. The worker model: `cli.run_app(WorkerOptions(...))`
+  registers a worker with Cloud; an empty `agent_name` auto-dispatches it to every
+  room. The hosted turn detector runs on LiveKit inference when you're on Cloud.
+- **Version drift is real** — exactly what the "SDKs change across versions" hint
+  was pointing at. `livekit-plugins-anthropic` 1.7.1 still wires an `httpx` v1
+  client (rejected by `anthropic` 1.x, which is on `httpx2`) and its
+  prefill-suppression list stops at `claude-*-4-6`. Both are handled in
+  `agent/providers.py`; both are the kind of thing a TAM would need to spot fast
+  when a customer's build breaks after an SDK bump.
+- **What's simulated.** I have one LiveKit test project, not a book of accounts, so
+  portfolio breadth (`scripts/simulate_accounts.py`) is fabricated and labelled
+  `source = sim`. Six sessions across three accounts are real LiveKit Cloud calls
+  (`source = live`), marked as such throughout the UI.
+
+## What I'd build next with access to real accounts
+
+- **Close the webhook loop** — tunnel + the Cloud dashboard webhook — so `events`
+  is real: accurate session start/end, participant counts, and a real
+  graceful/ungraceful verdict instead of `NULL`.
+- **LiveKit Cloud Analytics API** instead of reconstructing session history from
+  webhooks — authoritative session-minutes, peak concurrency, and per-region data.
+- **Per-region breakdown.** Latency and connection quality are regional; every
+  signal should split by the participant's `region`, and "poor quality in
+  eu-central only" is a very different TAM conversation than "poor everywhere".
+- **Thresholds co-owned with the customer.** One `thresholds.yaml` per account,
+  set to *their* product SLO and contract, agreed in the QBR and revisited each
+  quarter — the dashboard would show "your bar", not my illustrative one.
+- **Wire the output into the workflow.** A verdict flip → a Slack/email to the
+  owning TAM; the account brief → a slide exported straight into the QBR deck;
+  the "expansion signal" → a task on the AE.
+- **Drop the simulator.** Keep the deterministic scoring, replace fabricated
+  breadth with real fleet data, and run `lk load-test` at real portfolio scale for
+  capacity planning.
+
+## Time spent
+
+About 3 days, from no prior LiveKit exposure — most of it on the API-verification
+pass (`NOTES-livekit-api.md`) and the two SDK-drift workarounds, not the analytics,
+which is familiar ground.

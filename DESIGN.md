@@ -1,7 +1,12 @@
 # DESIGN — Portfolio Signal
 
-Scoring rationale and the verified-vs-inferred split. The prose write-up (README) is
-finished in Phase 6; the scoring design below is current as of Phase 3.
+Scoring rationale, the verified-vs-inferred split, and the approximations the numbers
+rest on. Current as of Phase 6. The narrative write-up (what this is, what I learned,
+what's next) is in `README.md`; the API-surface detail is in `NOTES-livekit-api.md`.
+
+**Framing (repeated from the README because it matters here most):** I picked LiveKit
+up over a few days for this piece. Nothing below is real-time-systems expertise. Every
+place I reasoned by analogy instead of verifying is called out as such.
 
 ## Why deterministic scoring (not a model)
 
@@ -24,18 +29,58 @@ the **framework** — signal -> verdict -> TAM action — which survives re-tuni
 
 ## LiveKit facts I verified vs. reasoning by analogy
 
-See `NOTES-livekit-api.md` for the detailed verified-vs-assumed split on the API
-surface. At the *design* level:
+`NOTES-livekit-api.md` has the line-by-line API detail. The design-level split:
 
-- **Verified:** the metric objects exist and carry per-component latency
-  (`LLMMetrics.ttft`, `TTSMetrics.ttfb`, `EOUMetrics.end_of_utterance_delay`); the
-  webhook model; the connection-quality event and its `excellent/good/poor/lost`
-  levels.
-- **Reasoning by analogy from other platforms (BI / observability / SaaS health
-  scoring):** that week-over-week trend + a baseline comparison is the right shape
-  for a health signal; that a red/amber/green worst-of rollup is legible to execs;
-  that usage-vs-plan-limit is the cleanest expansion signal. None of that is
-  LiveKit-specific — it's carried over from dashboards I've built before.
+### LiveKit facts I verified (source read + confirmed against a real call)
+
+- The agent emits `metrics_collected` on `AgentSession`; the per-component objects
+  carry `LLMMetrics.ttft`, `TTSMetrics.ttfb`, `EOUMetrics.end_of_utterance_delay` /
+  `transcription_delay`, all **in seconds**. Cross-checked against a real call:
+  `claude-haiku-4-5` TTFT ~0.65 s, `claude-sonnet-4-6` ~1.1 s on the same pipeline.
+- `EOUMetrics` / `LLMMetrics` / `TTSMetrics` for one turn share a `speech_id` — that
+  is the correlation key the turn-assembly in `agent/metrics_sink.py` relies on.
+- Connection quality arrives as `room.on("connection_quality_changed")` →
+  `(participant, quality)` with `QUALITY_{EXCELLENT,GOOD,POOR,LOST,UNKNOWN}`. Only
+  *transitions* are delivered — there is no continuous sample. The agent receives
+  these for the **remote** participant, not only itself.
+- Webhook auth: a JWT in the `Authorization` header whose claims include a
+  `sha256` of the body; verify with `livekit.api.WebhookReceiver` over the **raw**
+  body bytes. Event names (`room_started/finished`,
+  `participant_joined/left/connection_aborted`, `track_*`, `egress_*`, `ingress_*`)
+  come from the docs, not the proto.
+- The worker model: `cli.run_app(WorkerOptions(entrypoint_fnc=...))` registers a
+  worker with LiveKit Cloud; an empty `agent_name` auto-dispatches it to every room
+  in the project. The hosted turn detector (`turn-detector-v1`) runs on LiveKit's
+  inference when the worker runs against Cloud — no local model or extra key.
+- SDK version drift is real and load-bearing: `livekit-plugins-anthropic` 1.7.1
+  still constructs an `httpx` v1 client (rejected by `anthropic` 1.x on `httpx2`)
+  and its prefill-suppression list stops at `claude-*-4-6`. Both are worked around
+  in `agent/providers.py`.
+
+### Not verified — still assumed, needs the webhook path or real accounts
+
+- Which `disconnect_reason` codes LiveKit actually sends on the `participant_left`
+  webhook (so which count as "ungraceful"). The receiver was tested only with a
+  self-signed token; no live webhook has been delivered. Every real session
+  currently gets `graceful_end = NULL`.
+- Whether `metrics_collected` will be removed in a future `livekit-agents` minor
+  (its docstring says it is deprecated for *usage* accounting → `session_usage_updated`;
+  per-turn latency is also on `ChatMessage.metrics`). This project uses
+  `metrics_collected` because it still fires and is the cleanest per-turn source.
+
+### Reasoning by analogy from other platforms (BI / observability / SaaS health)
+
+None of this is LiveKit-specific; it is carried over from dashboards I've built
+before:
+
+- week-over-week trend + a prior-window baseline is the right shape for a health
+  signal;
+- a red/amber/green *worst-of* rollup is what reads cleanly to an exec;
+- usage-as-%-of-plan-limit is the cleanest expansion signal, and expansion is a
+  *good* problem — it should never by itself make an account "At-risk";
+- ratio-based signals (error rate ×baseline, p95 ×last week) need an absolute floor
+  or they fire on noise — hence `min_abs` / `min_abs_ms`;
+- the LLM should write the brief's prose but never the verdict.
 
 ## Derived quantities that are approximations
 
@@ -61,6 +106,9 @@ surface. At the *design* level:
   here is bounded by metric-flush timestamps, so it under-reads the true call length.
   All 6 real LiveKit sessions currently land here, so none of them carry a
   graceful/ungraceful verdict yet — that needs the webhook path.
+- **Peak concurrency** = max overlap of session `[start, end]` spans in the window
+  (sweep line, `pipeline/rollups.py::_peak_concurrency`). A reconstruction from
+  session bounds, not a figure LiveKit reports.
 
 ## Live vs simulated rows (`source` column)
 
@@ -72,9 +120,7 @@ real LiveKit test project, not a portfolio; the scoring framework is identical f
 both. The dashboard surfaces the split so a reviewer can see exactly which numbers
 are real. Real calls are deliberately mixed into seeded accounts (`acme-corp`,
 `globex`, `northwind`) — with real telemetry folded in, `acme-corp`'s verdict moves
-because its live calls run slower than its simulated history.
-- **Peak concurrency** = max overlap of session `[start, end]` spans in the window
-  (sweep line, `pipeline/rollups.py::_peak_concurrency`).
+(Healthy → At-risk) because its live calls run slower than its simulated history.
 
 ## Scoring rules (implemented in `pipeline/scoring.py`)
 
