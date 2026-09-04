@@ -42,7 +42,12 @@ Built in phases; this is a checkpointed build.
       the TAM action, session-timeline scatter, latency histogram this-week-vs-prior,
       connection-quality seconds by level, turn-detail table, token cost). Reuses
       `pipeline.scoring` / `pipeline.rollups` so the numbers match the CLI.
-- [ ] Phase 5 — LLM account brief
+- [x] **Phase 5 — Account brief.** `brief/llm_brief.py` + `brief/prompt.md` — the
+      account's scored numbers → a tight `claude-sonnet-5` call → a 6–8 sentence
+      exec summary. The deterministic rules make the verdict; the model only writes
+      the prose (and the prompt forbids inventing metrics). Surfaced behind a
+      "Generate brief" button in the dashboard drill-down; also
+      `python -m brief.llm_brief --account <id>` (`--facts-only` for no API call).
 - [ ] Phase 6 — Write-up (this file + `DESIGN.md` get their full content here)
 
 ## Signal -> TAM action
@@ -148,7 +153,14 @@ python scripts/sim_call.py --account globex --degrade   # frame drop + jitter + 
 room_sid; synthetic rooms are `SIM_`).
 
 `pipeline.rollups` runs `derive_sessions()` itself, so after a re-simulate you can just
-re-run it. Sample output:
+re-run it. For the exec brief of one account:
+
+```bash
+python -m brief.llm_brief --account acme-corp             # one claude-sonnet-5 call
+python -m brief.llm_brief --account acme-corp --facts-only # the DATA block only, no API call
+```
+
+Sample output:
 
 ```
 ACCOUNT             VERDICT  TREND  SESS  RED/AMBER  p95 TTFT (WoW)  ERR vs base  USAGE min/conc  TOP REASON
