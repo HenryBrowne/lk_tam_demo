@@ -20,11 +20,14 @@ Built in phases; this is a checkpointed build.
 
 - [x] **Phase 1 — Scaffold + LiveKit API verification.** Repo, pinned venv,
       `.env.example`, `NOTES-livekit-api.md` (verified-vs-assumed API surface).
-- [~] **Phase 2 — Ingest.** Webhook receiver (`receiver/app.py`, JWT + body-hash
+- [x] **Phase 2 — Ingest.** Webhook receiver (`receiver/app.py`, JWT + body-hash
       verify -> `events`) and voice agent + metrics hook (`agent/`, `metrics_collected`
       / `connection_quality_changed` -> `turn_metrics`, `quality_events`). SQLite
-      schema in `pipeline/db.py`. Verify flow and metric-assembly are unit-tested;
-      **live "talk to the agent" checkpoint pending keys.**
+      schema in `pipeline/db.py`. **Live checkpoint passed:** a synthetic caller
+      (`scripts/sim_call.py`) drove a real Deepgram->Claude->Cartesia call on LiveKit
+      Cloud and 4 `turn_metrics` + 2 `quality_events` rows landed with real latency /
+      token numbers. Webhook path verified offline (self-signed token); live webhook
+      delivery still needs a tunnel + dashboard config. See `NOTES-livekit-api.md`.
 - [ ] Phase 3 — Pipeline (derive sessions, scoring, rollups, simulator, load test)
 - [ ] Phase 4 — Streamlit dashboard
 - [ ] Phase 5 — LLM account brief
@@ -81,11 +84,11 @@ local dev tunnel it (`cloudflared tunnel --url http://localhost:8080`, `ngrok ht
 ```bash
 # 2. voice agent (separate terminal)
 python -m agent.main dev       # registers with LIVEKIT_URL, waits for a room
-#   first run may download a ~108MB local turn-detector model
 
-# 3. talk to it
-#   open https://agents-playground.livekit.io, connect it to your project,
-#   join a room and speak — or:  lk room join --publish-mic --identity me <room>
+# 3. drive a call — either a synthetic caller (no mic needed):
+python scripts/sim_call.py --account acme-corp
+#   ...or talk to it yourself: open https://agents-playground.livekit.io,
+#   connect it to your project, join a room and speak.
 
 # 4. see telemetry land
 python -m pipeline.db          # row counts + newest events / turn_metrics / quality_events

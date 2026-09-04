@@ -399,6 +399,76 @@ Still **not** verified (needs a live LiveKit Cloud run — the Phase 2 checkpoin
 
 ---
 
+## Phase 2 checkpoint — LIVE RUN results (2026-09-04, project `tam-monitor`)
+
+Ran `python -m agent.main dev` + `scripts/sim_call.py` (a synthetic caller that
+joins a room tagged `{"account_id": "acme-corp"}` and speaks 3 Cartesia-synthesized
+turns). Agent = Deepgram nova-3 -> Claude `claude-haiku-4-5` -> Cartesia sonic-3.
+
+**Result: 4 `turn_metrics` rows + 2 `quality_events` rows written, all with
+`account_id='acme-corp'`.** Representative row:
+
+```
+ttft_ms=646.7  ttfb_ms=211.3  eou_ms=577.0  total_latency_ms=1689.6
+llm_tokens_in=104  llm_tokens_out=46  error_flag=0
+```
+
+### Now CONFIRMED (was assumed)
+
+- **EOU / LLM / TTS share one `speech_id` per turn.** The sink's correlation key
+  works. (The agent's opening greeting produces an LLM+TTS pair with **no** EOU —
+  `eou_ms` is NULL for that row, which is correct: no user turn preceded it.)
+- **The agent receives `connection_quality_changed` for the remote (caller)
+  participant**, not just itself — got a `quality_events` row for
+  `acct-acme-corp__sim-caller`. So this signal is usable.
+- **`turn-detector-v1` (LiveKit hosted inference) works with only
+  `LIVEKIT_URL/API_KEY/API_SECRET`** — `EOUMetrics.metadata.model_name` came back as
+  `turn-detector-v1`, `model_provider = livekit`. No extra inference key or local
+  model download was needed on a hosted run. `end_of_utterance_delay ≈ 0.58s`
+  consistently.
+- **Latency-field units confirmed as seconds** by cross-checking the SDK's own
+  "LLM metrics" / "TTS metrics" log lines (`ttft: 0.76`) against our stored
+  `ttft_ms=763.0`.
+- Deepgram `STTMetrics` fire but carry `audio_duration` only (no per-request latency
+  when streaming, as documented) and **no `speech_id`** — so STT stays out of turn
+  assembly, as designed. Token/usage totals will come from `session_usage_updated`.
+- `InterruptionMetrics` (`model: "adaptive interruption"`, provider `livekit`) also
+  stream — not used by Portfolio Signal, ignored by the sink.
+- Graceful disconnect: session closed with
+  `reason="participant_disconnected", error=null`.
+
+### Two real bugs found and fixed (see `agent/providers.py`)
+
+1. **`RuntimeError: Plugins must be registered on the main thread`.** Lazily
+   importing `livekit.plugins.*` inside the factory functions (which run on a job
+   thread) fails — `Plugin.register_plugin()` must run on the main thread. Fix:
+   import all plugin packages at module top level in `providers.py`.
+2. **`TypeError: Invalid http_client argument; Expected httpx2.AsyncClient but got
+   httpx.AsyncClient`.** `livekit-plugins-anthropic` 1.7.1 (`Requires-Dist:
+   anthropic>=0.41`, `httpx`) hard-codes an `httpx` (v1) client, but `anthropic`
+   1.3.0 is built on `httpx2` and rejects it. Fix: pass our own
+   `client=anthropic.AsyncAnthropic()` to `anthropic.LLM(...)` — the plugin uses
+   `client or <its own>`, so this bypasses the broken wiring and keeps us on the
+   current SDK (which Phase 5's brief also uses). Reproducible because
+   `requirements.lock.txt` pins both.
+
+### Still open
+
+- **Webhook `events`** — not exercised live yet (needs a public tunnel + the
+  LiveKit dashboard webhook pointed at `/livekit/webhook`). Verified offline with a
+  self-signed token; unchanged.
+- **`disconnect_reason` on the `participant_left` webhook** — still unverified;
+  needs the webhook path running during a call.
+- **`enable_recording: true`** appears in the job-dispatch payload (a project-level
+  setting on `tam-monitor`). `session.start(record=False)` is set on our side; the
+  room-level auto-egress is a separate dashboard toggle. No errors seen from it, but
+  worth turning off in the dashboard if egress minutes matter.
+- The sim caller's fixed inter-turn gaps make the agent log occasional
+  `InterruptionMetrics` (it briefly thinks the caller barged in). Cosmetic; real
+  human turns won't do this.
+
+---
+
 ## Summary — what's solid vs what needs the Phase 2 run
 
 **Solid (read straight from installed source + confirmed in docs):**

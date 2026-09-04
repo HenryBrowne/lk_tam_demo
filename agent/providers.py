@@ -5,11 +5,18 @@ AGENT_LLM_PROVIDER / AGENT_TTS_PROVIDER to ``openai`` to move that stage to
 OpenAI (the all-OpenAI, one-key fallback path). Plugins read their own API keys
 from the environment (DEEPGRAM_API_KEY, CARTESIA_API_KEY, OPENAI_API_KEY,
 ANTHROPIC_API_KEY).
+
+NOTE: the plugin packages are imported at module load, not lazily inside the
+factories. livekit-agents requires ``Plugin.register_plugin()`` to run on the
+main thread, and the factories are called from a job thread.
 """
 
 from __future__ import annotations
 
 import os
+
+import anthropic as anthropic_sdk
+from livekit.plugins import anthropic, cartesia, deepgram, openai
 
 
 def _p(name: str, default: str) -> str:
@@ -18,44 +25,39 @@ def _p(name: str, default: str) -> str:
 
 def make_stt():
     provider = _p("AGENT_STT_PROVIDER", "deepgram")
-    if provider == "openai":
-        from livekit.plugins import openai
-
-        return openai.STT(model="whisper-1")
     if provider == "deepgram":
-        from livekit.plugins import deepgram
-
         return deepgram.STT(model="nova-3", language="en-US")
+    if provider == "openai":
+        return openai.STT(model="whisper-1")
     raise ValueError(f"unknown AGENT_STT_PROVIDER={provider!r} (deepgram | openai)")
 
 
 def make_llm():
     provider = _p("AGENT_LLM_PROVIDER", "anthropic")
-    model = os.environ.get("AGENT_LLM_MODEL", "claude-haiku-4-5")
     if provider == "anthropic":
-        from livekit.plugins import anthropic
-
-        # NOTE: livekit-plugins-anthropic 1.7.1 only suppresses assistant-prefill
-        # for claude-sonnet-4-6 / claude-opus-4-6. claude-haiku-4-5 still accepts
-        # prefill, so it is the safe default here. See NOTES-livekit-api.md section 6.
-        return anthropic.LLM(model=model)
+        # Two livekit-plugins-anthropic 1.7.1 quirks, both handled here (see
+        # NOTES-livekit-api.md section 6):
+        #  1. It builds an httpx(v1) client, which the httpx2-based anthropic SDK
+        #     rejects with a TypeError. Passing our own AsyncAnthropic (reads
+        #     ANTHROPIC_API_KEY from env) bypasses the plugin's client wiring.
+        #  2. Its prefill-suppression list only covers claude-sonnet-4-6 /
+        #     claude-opus-4-6; claude-haiku-4-5 still accepts prefill, so it is the
+        #     safe default model.
+        return anthropic.LLM(
+            model=os.environ.get("AGENT_LLM_MODEL", "claude-haiku-4-5"),
+            client=anthropic_sdk.AsyncAnthropic(),
+        )
     if provider == "openai":
-        from livekit.plugins import openai
-
         return openai.LLM(model=os.environ.get("AGENT_LLM_MODEL", "gpt-4o-mini"))
     raise ValueError(f"unknown AGENT_LLM_PROVIDER={provider!r} (anthropic | openai)")
 
 
 def make_tts():
     provider = _p("AGENT_TTS_PROVIDER", "cartesia")
-    if provider == "openai":
-        from livekit.plugins import openai
-
-        return openai.TTS(model="tts-1", voice="alloy")
     if provider == "cartesia":
-        from livekit.plugins import cartesia
-
         return cartesia.TTS(model="sonic-3")
+    if provider == "openai":
+        return openai.TTS(model="tts-1", voice="alloy")
     raise ValueError(f"unknown AGENT_TTS_PROVIDER={provider!r} (cartesia | openai)")
 
 

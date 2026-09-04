@@ -16,7 +16,10 @@ livekit-plugins-turn-detector==1.7.1   # end-of-utterance model (feeds eou_ms)
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
 
-# --- Account brief (LLM) ---
+# --- Account brief (LLM) + agent LLM node ---
+# anthropic 1.3.0 is httpx2-based; livekit-plugins-anthropic 1.7.1 still wires an
+# httpx(v1) client, so agent/providers.py passes its own AsyncAnthropic client to
+# livekit.plugins.anthropic.LLM(). See NOTES-livekit-api.md "Phase 2 checkpoint".
 anthropic==1.3.0
 
 # --- Dashboard ---
