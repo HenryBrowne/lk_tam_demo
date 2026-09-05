@@ -545,10 +545,26 @@ actually be checked rather than left as an untested branch in `agent/providers.p
   (16 kHz vs 24 kHz) from whichever `AGENT_TTS_PROVIDER` is active, and its
   caller-voice synthesis (a separate direct HTTP call from the agent's own TTS)
   now has an `openai_pcm()` branch alongside `cartesia_pcm()`.
-- **Not yet verified**: an actual OpenAI STT/TTS turn end-to-end through the
-  agent (only construction-tested — `make_stt()`/`make_tts()` build the plugin
-  objects without error; no live call has been run on this path, unlike
-  Deepgram+Cartesia+Anthropic which has real call history throughout this file).
+- **Now verified live** (2026-09-05, `tam-monitor`, `claude-haiku-4-5` +
+  `gpt-4o-mini-transcribe` + `gpt-4o-mini-tts`): a real call end-to-end. Real
+  numbers - LLM ttft ~0.62-0.80s (in line with the Anthropic-direct path,
+  unaffected by the TTS/STT swap); **TTS ttfb ~0.54-1.87s** - meaningfully higher
+  and more variable than Cartesia's ~0.15-0.23s on the same account earlier.
+  `gpt-4o-mini-transcribe` STT metrics fire correctly with `audio_duration` only
+  (no per-word timing), same shape as Deepgram's.
+- **Bug found and fixed by this verification** (`agent/metrics_sink.py`): a reply
+  can be synthesized as more than one audio segment, each firing its own
+  `TTSMetrics` for the same `speech_id`. Cartesia only ever did this once per
+  reply, so `MetricsSink` had never been exercised against a multi-segment case -
+  it flushed and cleared the turn's buffer on *every* `TTSMetrics` event, so
+  OpenAI's per-sentence TTS chunking produced one correct row plus one near-empty
+  duplicate row (`ttfb_ms` only, everything else `NULL`) per turn. Fixed by
+  tracking flushed `speech_id`s and ignoring metrics that arrive for one after
+  it's already been written - confirmed by a unit test (3 TTS segments -> 1 row,
+  keeping the *first* segment's ttfb) and a second live call (4 turns -> 4 rows,
+  no duplicates). The 4 duplicate rows from the first live run were deleted from
+  `data/portfolio.db`. This was a latent bug since Phase 2 that Cartesia's
+  single-segment behavior happened to never trigger.
 
 ---
 

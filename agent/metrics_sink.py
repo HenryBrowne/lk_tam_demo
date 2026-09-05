@@ -3,8 +3,16 @@
 
 A "turn" is assembled from the separate STT/EOU/LLM/TTS metric objects that share
 a ``speech_id`` (the agent's response-speech id). We buffer per speech_id and
-write the row when the TTS metric arrives (reply audio has started = the turn is
+write the row on the first TTS metric (reply audio has started = the turn is
 complete enough to record). Anything still buffered at shutdown is flushed as-is.
+
+A reply can be synthesized in more than one audio segment, and each segment fires
+its own TTSMetrics for the same speech_id - Cartesia only ever did this once per
+reply in testing, but OpenAI's TTS (gpt-4o-mini-tts) fires one per sentence chunk.
+Only the first segment's TTSMetrics is kept (its ttfb is "time to first audio byte
+of the reply", which is what total_latency_ms wants); every later TTSMetrics for
+an already-flushed speech_id is ignored rather than written as a second, mostly
+empty row. See NOTES-livekit-api.md for how this surfaced.
 
 All SDK latency fields are in seconds; we store milliseconds.
 """
@@ -41,15 +49,20 @@ class MetricsSink:
         self._conn = conn
         self._state = state
         self._turns: dict[str, dict] = {}
+        self._flushed: set[str] = set()  # speech_ids already written; later metrics for them are ignored
 
     # ---- metrics_collected -------------------------------------------------
     def handle_metric(self, m) -> None:
         if isinstance(m, EOUMetrics):
             turn = self._turn(m.speech_id)
+            if turn is None:
+                return
             turn["eou_ms"] = _ms(m.end_of_utterance_delay)
             turn["transcription_ms"] = _ms(m.transcription_delay)
         elif isinstance(m, LLMMetrics):
             turn = self._turn(m.speech_id)
+            if turn is None:
+                return
             turn["ttft_ms"] = _ms(m.ttft)
             turn["llm_tokens_in"] = m.prompt_tokens
             turn["llm_tokens_out"] = m.completion_tokens
@@ -57,17 +70,21 @@ class MetricsSink:
                 turn["error_flag"] = 1
         elif isinstance(m, TTSMetrics):
             turn = self._turn(m.speech_id)
+            if turn is None:
+                return  # a later audio segment of a reply we already recorded - drop it
             turn["ttfb_ms"] = _ms(m.ttfb)
             if m.cancelled:
                 turn["error_flag"] = 1
-            self._flush(m.speech_id)  # TTS is last in the chain
+            self._flush(m.speech_id)  # first TTS segment is last in the chain we record
         elif isinstance(m, STTMetrics):
             # STT metrics have no speech_id, so they can't be tied to a turn here.
             # Token/usage totals come from session_usage_updated instead.
             pass
 
-    def _turn(self, speech_id: str | None) -> dict:
+    def _turn(self, speech_id: str | None) -> dict | None:
         key = speech_id or "_no_speech_id"
+        if speech_id and key in self._flushed:
+            return None
         return self._turns.setdefault(
             key,
             {
@@ -82,6 +99,8 @@ class MetricsSink:
         turn = self._turns.pop(key, None)
         if turn is None:
             return
+        if speech_id:
+            self._flushed.add(key)
         parts = [
             turn["eou_ms"], turn["transcription_ms"], turn["ttft_ms"], turn["ttfb_ms"],
         ]
