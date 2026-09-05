@@ -29,3 +29,4 @@ Thumbs.db
 # --- Model / cache downloads (turn-detector, silero) ---
 # livekit downloads model files on first run; keep them out of git
 *.onnx
+data/exports/

@@ -28,7 +28,10 @@ def make_stt():
     if provider == "deepgram":
         return deepgram.STT(model="nova-3", language="en-US")
     if provider == "openai":
-        return openai.STT(model="whisper-1")
+        # gpt-4o-mini-transcribe is the plugin's own current default (verified against
+        # the installed livekit-plugins-openai signature) - whisper-1 also still works
+        # as a plain model string, but this is the better-supported current model.
+        return openai.STT(model="gpt-4o-mini-transcribe")
     raise ValueError(f"unknown AGENT_STT_PROVIDER={provider!r} (deepgram | openai)")
 
 
@@ -57,7 +60,10 @@ def make_tts():
     if provider == "cartesia":
         return cartesia.TTS(model="sonic-3")
     if provider == "openai":
-        return openai.TTS(model="tts-1", voice="alloy")
+        # gpt-4o-mini-tts / ash are the plugin's own current defaults (verified
+        # against the installed livekit-plugins-openai signature); tts-1/alloy also
+        # still work as plain strings but are the older, lower-quality pairing.
+        return openai.TTS(model="gpt-4o-mini-tts", voice="ash")
     raise ValueError(f"unknown AGENT_TTS_PROVIDER={provider!r} (cartesia | openai)")
 
 

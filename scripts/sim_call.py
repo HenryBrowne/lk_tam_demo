@@ -1,11 +1,18 @@
 """Synthetic caller: join a LiveKit room tagged to an account and speak a few
-turns of Cartesia-synthesized speech, so the running agent produces real
-turn_metrics / quality_events rows without a human at a mic.
+turns of synthesized speech, so the running agent produces real turn_metrics /
+quality_events rows without a human at a mic.
 
 Prereq: the agent worker must be running (`python -m agent.main dev`).
 
     python scripts/sim_call.py --account acme-corp
     python scripts/sim_call.py --account globex --gap 8 --turns 2
+
+The caller's voice is synthesized with whatever AGENT_TTS_PROVIDER is set to
+(cartesia | openai) - same env var that picks the agent's own TTS, so one setting
+controls both sides of the call. Cartesia returns 16kHz PCM (we choose the rate);
+OpenAI's `response_format=pcm` is a fixed 24kHz (verified against the sample rate
+livekit-plugins-openai's own TTS class assumes for that format) - SAMPLE_RATE
+below tracks whichever is active.
 
 This is also the seed for Phase 3's simulate_accounts.py.
 """
@@ -25,11 +32,13 @@ from livekit import api, rtc
 
 load_dotenv()
 
-SAMPLE_RATE = 16_000
+CALLER_TTS_PROVIDER = os.environ.get("AGENT_TTS_PROVIDER", "cartesia").strip().lower()
+
+SAMPLE_RATE = 24_000 if CALLER_TTS_PROVIDER == "openai" else 16_000
 CHANNELS = 1
 FRAME_MS = 10
-SAMPLES_PER_FRAME = SAMPLE_RATE * FRAME_MS // 1000        # 160
-BYTES_PER_FRAME = SAMPLES_PER_FRAME * 2                   # 320 (s16le mono)
+SAMPLES_PER_FRAME = SAMPLE_RATE * FRAME_MS // 1000        # 240 @24k / 160 @16k
+BYTES_PER_FRAME = SAMPLES_PER_FRAME * 2                   # s16le mono
 
 # A short, coherent "prospect evaluating the platform" call.
 DEFAULT_UTTERANCES = [
@@ -41,6 +50,9 @@ DEFAULT_UTTERANCES = [
 
 # Cartesia default English voice id (same one used in the Phase 2 key check).
 CARTESIA_VOICE_ID = "a0e99841-438c-4a64-b679-ae501e7d6091"
+# Matches the agent's own OpenAI TTS defaults in agent/providers.py.
+OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
+OPENAI_TTS_VOICE = "ash"
 
 
 def cartesia_pcm(text: str) -> bytes:
@@ -70,6 +82,36 @@ def cartesia_pcm(text: str) -> bytes:
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
+
+
+def openai_pcm(text: str) -> bytes:
+    """Synthesize `text` to raw 24 kHz mono s16le PCM via OpenAI's TTS API."""
+    body = json.dumps(
+        {
+            "model": OPENAI_TTS_MODEL,
+            "input": text,
+            "voice": OPENAI_TTS_VOICE,
+            "response_format": "pcm",
+        }
+    ).encode()
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/audio/speech",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read()
+
+
+def synthesize_pcm(text: str) -> bytes:
+    """Caller-voice synthesis, routed by AGENT_TTS_PROVIDER."""
+    if CALLER_TTS_PROVIDER == "openai":
+        return openai_pcm(text)
+    return cartesia_pcm(text)
 
 
 async def _push(source: rtc.AudioSource, pcm: bytes, drop_rate: float = 0.0,
@@ -118,8 +160,8 @@ async def run(account: str, room_name: str, gap_s: float, n_turns: int,
 
     # 2. synthesize the caller's lines
     lines = DEFAULT_UTTERANCES[:n_turns]
-    print(f"synthesizing {len(lines)} utterance(s) via Cartesia ...")
-    pcms = [cartesia_pcm(t) for t in lines]
+    print(f"synthesizing {len(lines)} utterance(s) via {CALLER_TTS_PROVIDER} ...")
+    pcms = [synthesize_pcm(t) for t in lines]
 
     # 3. join as the caller and publish a mic track
     identity = f"acct-{account}__sim-caller"

@@ -525,6 +525,31 @@ live share materially higher than ~3% without a real portfolio isn't really
 possible on a free-tier test project; the ceiling here is Cartesia/LiveKit quota,
 not engineering effort.
 
+### OpenAI fallback path — verified by source, not yet by a live call (2026-09-05)
+
+Cartesia's free-tier credits ran out mid-batch (see above), so the all-OpenAI
+fallback (`AGENT_STT_PROVIDER=openai`, `AGENT_TTS_PROVIDER=openai`) needed to
+actually be checked rather than left as an untested branch in `agent/providers.py`.
+
+- **Verified from the installed `livekit-plugins-openai` signatures**: the
+  plugin's own current defaults are `openai.STT(model="gpt-4o-mini-transcribe")`
+  and `openai.TTS(model="gpt-4o-mini-tts", voice="ash")` — not `whisper-1` /
+  `tts-1` / `alloy`, which is what was originally hardcoded here from memory in
+  Phase 2. Those older names are still accepted (the SDK just takes a string),
+  but `agent/providers.py` now uses the plugin's actual current defaults instead
+  of a guess.
+- **Verified from `livekit/plugins/openai/tts.py` source**: OpenAI's
+  `response_format="pcm"` is a fixed **24 kHz mono s16le** stream (the plugin
+  hardcodes `SAMPLE_RATE = 24000` for it) — unlike Cartesia, where the caller
+  picks the sample rate. `scripts/sim_call.py` now derives its `SAMPLE_RATE`
+  (16 kHz vs 24 kHz) from whichever `AGENT_TTS_PROVIDER` is active, and its
+  caller-voice synthesis (a separate direct HTTP call from the agent's own TTS)
+  now has an `openai_pcm()` branch alongside `cartesia_pcm()`.
+- **Not yet verified**: an actual OpenAI STT/TTS turn end-to-end through the
+  agent (only construction-tested — `make_stt()`/`make_tts()` build the plugin
+  objects without error; no live call has been run on this path, unlike
+  Deepgram+Cartesia+Anthropic which has real call history throughout this file).
+
 ---
 
 ## Summary — what's solid vs what needs the Phase 2 run
