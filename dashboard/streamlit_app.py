@@ -61,6 +61,11 @@ SIGNAL_TO_ACTION_TABLE = pd.DataFrame(
 # Illustrative unit economics for the token-cost panel: Claude Haiku 4.5 list price.
 COST_IN_PER_MTOK, COST_OUT_PER_MTOK = 1.00, 5.00
 
+# Drop the Plotly logo from the chart modebar - its link opens plotly.com in a new
+# tab, which is a distraction mid-demo. Keep the rest of the modebar (zoom / pan /
+# reset / download).
+PLOTLY_CONFIG = {"displaylogo": False}
+
 
 # ---------------------------------------------------------------------------
 # data loading (cached on the db file's mtime so "Refresh" actually refreshes)
@@ -261,7 +266,7 @@ def account_view(acc_id, rollups, scored, turns, quality, now, window_days):
             fig.add_hline(y=1800, line_dash="dash", line_color="#cf222e",
                           annotation_text="red ≥ 1800ms", annotation_position="right")
             base_layout(fig, ytitle="median turn latency (ms)")
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width="stretch", config=PLOTLY_CONFIG)
             st.caption("One dot per session, coloured by verdict (worst of latency / quality / stability). "
                        "◆ = a real LiveKit call.")
 
@@ -279,7 +284,7 @@ def account_view(acc_id, rollups, scored, turns, quality, now, window_days):
             fig.update_layout(barmode="overlay")
             threshold_lines(fig, [900, 1800], ["amber", "red"])
             base_layout(fig, ytitle="turns", xtitle="total latency per turn (ms)")
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width="stretch", config=PLOTLY_CONFIG)
 
             comp = this_turns[["ttft_ms", "ttfb_ms", "eou_ms"]].melt(var_name="component", value_name="ms").dropna()
             if not comp.empty:
@@ -290,7 +295,7 @@ def account_view(acc_id, rollups, scored, turns, quality, now, window_days):
                                           boxpoints=False))
                 base_layout(bfig, height=260, ytitle="ms (this 7d)")
                 bfig.update_layout(showlegend=False)
-                st.plotly_chart(bfig, width="stretch")
+                st.plotly_chart(bfig, width="stretch", config=PLOTLY_CONFIG)
                 st.caption("TTFT = LLM time-to-first-token · TTFB = TTS time-to-first-byte · EOU = end-of-utterance delay.")
 
     # --- 3. connection quality: seconds at each level, this vs prior week ---
@@ -309,7 +314,7 @@ def account_view(acc_id, rollups, scored, turns, quality, now, window_days):
                                          marker_color=[QUALITY_COLOR[q] for q in d["quality"]] if wk == "this 7d" else color))
                 fig.update_layout(barmode="group")
                 base_layout(fig, ytitle="participant-seconds at level")
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, width="stretch", config=PLOTLY_CONFIG)
                 bad = a_quality[a_quality["quality"].isin(["poor", "lost"])].sort_values("ts", ascending=False)
                 st.caption(f"{len(bad)} poor/lost events all-time for this account. Most recent:")
                 st.dataframe(bad.head(15)[["ts", "room_sid", "participant_id", "quality"]],
@@ -347,7 +352,7 @@ def account_view(acc_id, rollups, scored, turns, quality, now, window_days):
             fig.add_trace(go.Bar(x=daily["day"], y=daily["llm_tokens_out"], name="out", marker_color=ACCENT))
             fig.update_layout(barmode="stack")
             base_layout(fig, height=260, ytitle="tokens / day")
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width="stretch", config=PLOTLY_CONFIG)
 
     st.divider()
     st.markdown("**Account brief** &mdash; auto-drafted exec summary")
